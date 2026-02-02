@@ -723,7 +723,7 @@ DATA:
 {answer_summary}
 
 SCORES:
-{trait_summary}"""
+{trait_summary}{get_followup_data_for_prompt()}"""
 
     chapters = [
         f"""{base_context}
@@ -836,6 +836,277 @@ Write ONLY (max 250 words). No prior sections.
     
     return full_report
 
+def generate_followup_questions():
+    """Generate 5 personalized follow-up questions based on all 43 answers."""
+    lang = st.session_state.language
+    lang_name = "German" if lang == "de" else "English"
+    analysis = analyze_results()
+    tr = analysis["traits"]
+    
+    # Build answer summary from ALL questions
+    all_qs = get_all_questions(lang)
+    lines = []
+    for q in all_qs:
+        c = get_choice(q["id"])
+        if not c:
+            continue
+        intensity = get_intensity(q["id"])
+        i_label = "slightly" if intensity == 1 else ("clearly" if intensity == 2 else "strongly")
+        scenario = f'Scenario: {q["scenario"]} | ' if q.get("scenario") else ""
+        context = f'Context: {q["context"]} | ' if q.get("context") else ""
+        lines.append(f'Q{q["id"]} [{q["category"]}]: {scenario}{context}A: "{q["questionA"]}" | B: "{q["questionB"]}" | CHOSE: {c} ({i_label})')
+    answer_summary = "\n".join(lines)
+    
+    # Stress patterns for prompt
+    stress_patterns = []
+    if get_choice(21) == "A": stress_patterns.append("Confrontational under pressure")
+    if get_choice(21) == "B": stress_patterns.append("Withdrawing under pressure")
+    if get_choice(24) == "A": stress_patterns.append("Task-focused in emotional situations")
+    if get_choice(27) == "A": stress_patterns.append("Rule-bending when stakes are high")
+    if get_choice(30) == "A": stress_patterns.append("Perfectionism under deadline")
+    if get_choice(32) == "A": stress_patterns.append("Self-sacrifice pattern")
+    if get_choice(35) == "B": stress_patterns.append("Spreading thin under chaos")
+    
+    prompt = f"""You are a world-class psychometric analyst. Based on the following COMPLETE assessment data (43 questions including stress scenarios and self-designed rules), identify the 5 most interesting TENSIONS or PARADOXES in this person's profile. For each tension, generate a personalized follow-up question with exactly 3 options (A, B, C).
+
+WRITE IN {lang_name}.
+
+TRAIT SCORES (1-10):
+Big Five: Openness={tr["openness"]}, Conscientiousness={tr["conscientiousness"]}, Extraversion={tr["extraversion"]}, Agreeableness={tr["agreeableness"]}, Stability={tr["stability"]}
+Action Modes: ResearchDrive={tr["factFinder"]}, SystemsDrive={tr["followThru"]}, LaunchDrive={tr["quickStart"]}, BuildDrive={tr["implementor"]}
+Drivers: Autonomy={tr["autonomy"]}, Mastery={tr["mastery"]}, Power={tr["power"]}, Affiliation={tr["affiliation"]}
+Stress Patterns: {', '.join(stress_patterns) or 'None identified'}
+
+ALL 43 ANSWERS:
+{answer_summary}
+
+RULES:
+- Generate EXACTLY 5 questions in this order:
+  1. TRAIT PARADOX: Two personality traits that create unusual tension
+  2. TRAIT PARADOX: A second trait combination that seems contradictory or rare
+  3. STRESS PATTERN: How a specific stress behavior contradicts their baseline personality
+  4. STRESS PATTERN: A second stress reaction that reveals something unexpected
+  5. RULE CONTRADICTION: A mismatch between the rules they chose (Q36-Q43) and their actual behavior in earlier answers
+- Each question should reference the SPECIFIC tension you found
+- Options A, B, C should represent genuinely different ways the person might experience this tension
+- Questions should feel like a coach who just noticed something about you
+- Be concrete: reference their actual scores and answer patterns
+- Never use trademarked assessment names (no Kolbe, Hogan, MBTI, etc.)
+
+Respond with ONLY a JSON array, no markdown fences, no explanation. Format:
+[
+  {{"tension": "Short label", "question": "The question text", "optionA": "First option", "optionB": "Second option", "optionC": "Third option"}}
+]
+
+Return exactly 5 questions."""
+
+    try:
+        api_key = st.secrets.get("GEMINI_API_KEY", "")
+        if not api_key:
+            return None, "No API key configured"
+        
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
+        response = model.generate_content(prompt)
+        text = response.text.strip()
+        # Clean markdown fences if present
+        text = text.replace("```json", "").replace("```", "").strip()
+        parsed = json.loads(text)
+        if isinstance(parsed, list) and len(parsed) > 0:
+            return parsed, None
+        return None, "Invalid response format"
+    except Exception as e:
+        return None, str(e)
+
+def get_followup_data_for_prompt():
+    """Build follow-up answer data string for the deep analysis prompt."""
+    fqs = st.session_state.followup_questions
+    fas = st.session_state.followup_answers
+    if not fqs or not fas:
+        return ""
+    
+    lines = []
+    for i, q in enumerate(fqs):
+        a = fas.get(i)
+        if not a or not a.get("choice"):
+            continue
+        chosen = q["optionA"] if a["choice"] == "A" else q["optionB"] if a["choice"] == "B" else q["optionC"]
+        user_text = f' | USER ADDED: "{a["text"]}"' if a.get("text") else ""
+        lines.append(f'TENSION: {q["tension"]}\nQUESTION: {q["question"]}\nCHOSE {a["choice"]}: "{chosen}"{user_text}')
+    
+    if not lines:
+        return ""
+    return "\n\nPERSONALIZED FOLLOW-UP ANSWERS (these reveal how the person experiences their core tensions — reference these heavily in your analysis):\n" + "\n\n".join(lines)
+
+def generate_pdf(analysis, t, lang, deep_text=None):
+    """Generate a real PDF with trait bars, tables, and optional deep analysis."""
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.units import mm
+    from reportlab.lib.colors import HexColor, white, black
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib.enums import TA_LEFT
+    from reportlab.graphics.shapes import Drawing, Rect, String
+    from reportlab.graphics import renderPDF
+    import io
+    
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18*mm, rightMargin=18*mm, topMargin=20*mm, bottomMargin=20*mm)
+    
+    styles = getSampleStyleSheet()
+    
+    # Custom styles
+    style_title = ParagraphStyle('Title2', parent=styles['Title'], fontSize=20, textColor=HexColor('#111827'), spaceAfter=4)
+    style_subtitle = ParagraphStyle('Sub', parent=styles['Normal'], fontSize=10, textColor=HexColor('#6b7280'), spaceAfter=16)
+    style_section = ParagraphStyle('Section', parent=styles['Heading2'], fontSize=13, textColor=HexColor('#111827'), spaceBefore=20, spaceAfter=8, borderWidth=0)
+    style_subsection = ParagraphStyle('SubSec', parent=styles['Heading3'], fontSize=10, textColor=HexColor('#374151'), spaceBefore=12, spaceAfter=6)
+    style_body = ParagraphStyle('Body2', parent=styles['Normal'], fontSize=9, textColor=HexColor('#374151'), leading=14, spaceAfter=4)
+    style_small = ParagraphStyle('Small', parent=styles['Normal'], fontSize=7, textColor=HexColor('#9ca3af'), leading=10)
+    style_rule = ParagraphStyle('Rule', parent=styles['Normal'], fontSize=9, textColor=HexColor('#374151'), leading=13, leftIndent=8)
+    
+    story = []
+    tr = analysis["traits"]
+    date_str = datetime.now().strftime("%d. %B %Y" if lang == "de" else "%B %d, %Y")
+    
+    # Title
+    story.append(Paragraph(t["pdfTitle"], style_title))
+    story.append(Paragraph(f'{t["pdfGenerated"]} {date_str}', style_subtitle))
+    
+    # Helper: draw trait bar as a Drawing
+    def make_bar_drawing(label, value, color_hex):
+        d = Drawing(480, 16)
+        # Label
+        d.add(String(0, 4, label, fontSize=9, fillColor=HexColor('#374151'), fontName='Helvetica'))
+        # Bar background
+        bar_x = 160
+        bar_w = 260
+        d.add(Rect(bar_x, 2, bar_w, 10, fillColor=HexColor('#e5e7eb'), strokeColor=None, rx=4, ry=4))
+        # Bar fill
+        fill_w = max(2, bar_w * value / 10)
+        d.add(Rect(bar_x, 2, fill_w, 10, fillColor=HexColor(color_hex), strokeColor=None, rx=4, ry=4))
+        # Score
+        d.add(String(bar_x + bar_w + 10, 4, str(value), fontSize=9, fillColor=HexColor('#111827'), fontName='Helvetica-Bold'))
+        return d
+    
+    # Architecture section
+    story.append(Paragraph(t["architecture"], style_section))
+    
+    story.append(Paragraph(t["hardwareTitle"], style_subsection))
+    for key, label in [("openness", t["openness"]), ("conscientiousness", t["conscientiousness"]),
+                       ("extraversion", t["extraversion"]), ("agreeableness", t["agreeableness"]),
+                       ("stability", t["stability"])]:
+        story.append(make_bar_drawing(label, tr[key], '#3b82f6'))
+    
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(t["osTitle"], style_subsection))
+    for key, label in [("factFinder", t["factFinder"]), ("followThru", t["followThru"]),
+                       ("quickStart", t["quickStart"]), ("implementor", t["implementor"])]:
+        story.append(make_bar_drawing(label, tr[key], '#a855f7'))
+    
+    story.append(Spacer(1, 6))
+    story.append(Paragraph(t["driversTitle"], style_subsection))
+    for key, label in [("autonomy", t["autonomy"]), ("mastery", t["mastery"]),
+                       ("power", t["power"]), ("affiliation", t["affiliation"])]:
+        story.append(make_bar_drawing(label, tr[key], '#ec4899'))
+    
+    # Contextual Contrasts
+    story.append(Paragraph(t["contextualContrasts"], style_section))
+    contrast_data = [
+        [t["trait"], t["closeButNot"], t["clearlyNot"]],
+        [t["decisionSpeed"], t["impulsive"] if get_choice(14)=="A" else t["methodical"], t["paralysis"] if get_choice(14)=="A" else t["gambler"]],
+        [t["riskProfile"], t["calcRisk"] if get_choice(15)=="A" else t["steadyOpt"], t["riskAverse"] if get_choice(15)=="A" else t["thrillSeek"]],
+        [t["conflictStyle"], t["diplomatic"] if get_choice(16)=="A" else t["harmonious"], t["avoider"] if get_choice(16)=="A" else t["aggressive"]],
+        [t["learningMode"], t["experimental"] if get_choice(18)=="A" else t["studious"], t["theoretical"] if get_choice(18)=="A" else t["trialByFire"]],
+    ]
+    tbl = Table(contrast_data, colWidths=[120, 170, 170])
+    tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f9fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('TEXTCOLOR', (0, 0), (-1, -1), HexColor('#374151')),
+        ('TEXTCOLOR', (2, 1), (2, -1), HexColor('#9ca3af')),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.append(tbl)
+    
+    # Dark Side
+    story.append(Paragraph(t["darkSide"], style_section))
+    story.append(Paragraph(f'<b>{t["identifiedDerailers"]}</b>', style_body))
+    if analysis["stressPatterns"]:
+        for p in analysis["stressPatterns"]:
+            story.append(Paragraph(f'⚠ {p}', style_rule))
+    
+    # Environment Fit
+    story.append(Paragraph(t["environmentFit"], style_section))
+    env_data = [[t["thrivesIn"], t["failsIn"]]]
+    pairs = [
+        (tr["autonomy"] >= 6, t["highAutonomy"], t["structured"], t["micromanaged"], t["unstructured"]),
+        (tr["quickStart"] >= 6, t["fastMoving"], t["methodicalOrg"], t["slowMoving"], t["moveFast"]),
+        (tr["extraversion"] >= 6, t["collaborative"], t["deepWork"], t["isolated"], t["constantMeetings"]),
+        (tr["mastery"] >= 6, t["learningFocused"], t["executionFocused"], t["stagnant"], t["constantReinvention"]),
+    ]
+    for cond, hi, lo, fail_hi, fail_lo in pairs:
+        env_data.append([f'✓ {hi if cond else lo}', f'✗ {fail_hi if cond else fail_lo}'])
+    
+    env_tbl = Table(env_data, colWidths=[230, 230])
+    env_tbl.setStyle(TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), HexColor('#f9fafb')),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, -1), 8),
+        ('TEXTCOLOR', (0, 1), (0, -1), HexColor('#059669')),
+        ('TEXTCOLOR', (1, 1), (1, -1), HexColor('#dc2626')),
+        ('GRID', (0, 0), (-1, -1), 0.5, HexColor('#e5e7eb')),
+        ('TOPPADDING', (0, 0), (-1, -1), 5),
+        ('BOTTOMPADDING', (0, 0), (-1, -1), 5),
+        ('LEFTPADDING', (0, 0), (-1, -1), 8),
+    ]))
+    story.append(env_tbl)
+    
+    # Operational Rules
+    story.append(Paragraph(t["operationalRules"], style_section))
+    story.append(Paragraph(f'<i>{t["rulesIntro"]}</i>', style_body))
+    if analysis["operationalRules"]:
+        for i, rule in enumerate(analysis["operationalRules"]):
+            story.append(Paragraph(f'<b>Rule {i+1}:</b> ✓ {rule}', style_rule))
+    
+    # Deep Analysis
+    if deep_text:
+        story.append(PageBreak())
+        for line in deep_text.split('\n'):
+            stripped = line.strip()
+            if not stripped:
+                story.append(Spacer(1, 4))
+            elif stripped.startswith('# ') and not stripped.startswith('## '):
+                story.append(Paragraph(stripped[2:], style_title))
+            elif stripped.startswith('## '):
+                story.append(Paragraph(stripped[3:], style_section))
+            elif stripped.startswith('### '):
+                story.append(Paragraph(stripped[4:], style_subsection))
+            elif stripped.startswith('> '):
+                quote_style = ParagraphStyle('Quote', parent=style_body, leftIndent=12, textColor=HexColor('#374151'), fontName='Helvetica-Oblique', backColor=HexColor('#f5f3ff'))
+                story.append(Paragraph(stripped[2:], quote_style))
+            elif stripped.startswith('- ') or stripped.startswith('* '):
+                story.append(Paragraph(f'• {stripped[2:]}', style_rule))
+            elif stripped == '---':
+                story.append(Spacer(1, 8))
+            else:
+                # Handle inline bold
+                import re
+                cleaned = re.sub(r'\*\*(.+?)\*\*', r'<b>\1</b>', stripped)
+                story.append(Paragraph(cleaned, style_body))
+    
+    # Disclaimer
+    story.append(Spacer(1, 20))
+    story.append(Paragraph(t["disclaimer"], style_small))
+    
+    doc.build(story)
+    buf.seek(0)
+    return buf.getvalue()
+
 # ============================================================
 # INITIALIZE SESSION STATE
 # ============================================================
@@ -853,6 +1124,16 @@ if "deep_analysis" not in st.session_state:
     st.session_state.deep_analysis = ""
 if "active_tab" not in st.session_state:
     st.session_state.active_tab = "summary"
+if "followup_questions" not in st.session_state:
+    st.session_state.followup_questions = []
+if "followup_answers" not in st.session_state:
+    st.session_state.followup_answers = {}
+if "followup_index" not in st.session_state:
+    st.session_state.followup_index = 0
+if "followup_loading" not in st.session_state:
+    st.session_state.followup_loading = False
+if "followup_error" not in st.session_state:
+    st.session_state.followup_error = None
 
 # ============================================================
 # PAGE: LANGUAGE SELECTION
@@ -934,17 +1215,8 @@ elif st.session_state.page == "questions":
     with col_count:
         st.markdown(f'<span style="color:#94a3b8;font-size:14px;float:right;">{idx+1} / {total}</span>', unsafe_allow_html=True)
     
-    # Skip button (for testing)
-    import random
-    if st.button("⚡ SKIP — fill random & jump to results", use_container_width=True):
-        for qq in all_qs:
-            st.session_state.answers[qq["id"]] = {
-                "choice": random.choice(["A", "B"]),
-                "intensity": random.randint(1, 3)
-            }
-        st.session_state.page = "results"
-        st.session_state.pending_choice = None
-        st.rerun()
+    # Skip button — tiny, at bottom for dev only
+    # (moved to after the question card)
     
     # Category badge
     st.markdown(f'<div class="category-badge" style="background:{phase_color}22;color:{phase_color};">{q["category"]}</div>', unsafe_allow_html=True)
@@ -988,7 +1260,7 @@ elif st.session_state.page == "questions":
                 if idx + 1 < total:
                     st.session_state.current_index = idx + 1
                 else:
-                    st.session_state.page = "results"
+                    st.session_state.page = "followup"
                 st.rerun()
         with col2:
             if st.button(f"●● {t['clearly']}", use_container_width=True, key="int_2"):
@@ -997,7 +1269,7 @@ elif st.session_state.page == "questions":
                 if idx + 1 < total:
                     st.session_state.current_index = idx + 1
                 else:
-                    st.session_state.page = "results"
+                    st.session_state.page = "followup"
                 st.rerun()
         with col3:
             if st.button(f"●●● {t['strongly']}", use_container_width=True, key="int_3"):
@@ -1006,7 +1278,7 @@ elif st.session_state.page == "questions":
                 if idx + 1 < total:
                     st.session_state.current_index = idx + 1
                 else:
-                    st.session_state.page = "results"
+                    st.session_state.page = "followup"
                 st.rerun()
     
     # Back button
@@ -1019,6 +1291,157 @@ elif st.session_state.page == "questions":
         if st.button(t["back"], key="back_question"):
             st.session_state.current_index = idx - 1
             st.session_state.pending_choice = None
+            st.rerun()
+    
+    # Dev skip — almost invisible
+    import random
+    st.markdown("<br><br>", unsafe_allow_html=True)
+    if st.button("skip", key="dev_skip", type="secondary"):
+        for qq in all_qs:
+            st.session_state.answers[qq["id"]] = {
+                "choice": random.choice(["A", "B"]),
+                "intensity": random.randint(1, 3)
+            }
+        st.session_state.page = "results"
+        st.session_state.pending_choice = None
+        st.rerun()
+
+# ============================================================
+# PAGE: FOLLOW-UP (Phase 1.5)
+# ============================================================
+elif st.session_state.page == "followup":
+    lang = st.session_state.language
+    t = TRANSLATIONS[lang]
+    fqs = st.session_state.followup_questions
+    fi = st.session_state.followup_index
+    
+    # Generate questions if not yet done
+    if not fqs and not st.session_state.followup_error:
+        with st.spinner(
+            "Etwas ist mir aufgefallen... Basierend auf Ihren Antworten erstelle ich gezielte Nachfragen." if lang == "de"
+            else "Something caught my attention... Crafting targeted follow-up questions based on your answers."
+        ):
+            questions, error = generate_followup_questions()
+            if questions:
+                st.session_state.followup_questions = questions
+                st.session_state.followup_index = 0
+                st.rerun()
+            else:
+                st.session_state.followup_error = error
+                st.rerun()
+    
+    # Error state
+    if st.session_state.followup_error:
+        st.warning(
+            f"Persönliche Fragen konnten nicht generiert werden: {st.session_state.followup_error}" if lang == "de"
+            else f"Could not generate personal questions: {st.session_state.followup_error}"
+        )
+        col_retry, col_skip = st.columns(2)
+        with col_retry:
+            if st.button("🔄 " + ("Erneut versuchen" if lang == "de" else "Try Again"), use_container_width=True, type="primary"):
+                st.session_state.followup_error = None
+                st.session_state.followup_questions = []
+                st.rerun()
+        with col_skip:
+            if st.button("→ " + ("Überspringen" if lang == "de" else "Skip"), use_container_width=True):
+                st.session_state.page = "results"
+                st.rerun()
+    
+    # Show follow-up questions
+    elif fqs and fi < len(fqs):
+        fuq = fqs[fi]
+        fua = st.session_state.followup_answers.get(fi, {})
+        
+        # Header
+        st.markdown(f"""
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:8px;">
+                <div style="width:10px;height:10px;background:#06b6d4;border-radius:50%;animation:pulse 2s infinite;"></div>
+                <span style="font-size:13px;font-weight:700;color:#06b6d4;">
+                    {"PERSÖNLICHE VERTIEFUNG" if lang == "de" else "PERSONAL DEEP-DIVE"}
+                </span>
+            </div>
+            <span style="font-size:13px;color:#64748b;">{fi + 1} / {len(fqs)}</span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Tension badge
+        st.markdown(f"""
+        <div style="background:#0e374a;border:1px solid #164e63;border-radius:10px;padding:10px 14px;margin-bottom:16px;">
+            <span style="color:#06b6d4;font-size:13px;font-weight:500;">
+                🔍 {"Erkannte Spannung:" if lang == "de" else "Detected tension:"} 
+                <strong>{fuq["tension"]}</strong>
+            </span>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # Question
+        st.markdown(f"### {fuq['question']}")
+        
+        # Options A, B, C
+        current_choice = fua.get("choice")
+        
+        options = [
+            ("A", fuq["optionA"], "#3b82f6"),
+            ("B", fuq["optionB"], "#8b5cf6"),
+            ("C", fuq["optionC"], "#10b981"),
+        ]
+        
+        for key, text, color in options:
+            is_selected = current_choice == key
+            border = color if is_selected else "#334155"
+            bg = f"{color}22" if is_selected else "transparent"
+            if st.button(
+                f"{key})  {text}",
+                use_container_width=True,
+                key=f"fu_{fi}_{key}",
+                type="primary" if is_selected else "secondary"
+            ):
+                answers = st.session_state.followup_answers.copy()
+                answers[fi] = {**answers.get(fi, {}), "choice": key}
+                st.session_state.followup_answers = answers
+                st.rerun()
+        
+        # Optional text
+        st.markdown("")
+        text_val = fua.get("text", "")
+        new_text = st.text_area(
+            "💬 " + ("Kontext hinzufügen? (optional)" if lang == "de" else "Want to add context? (optional)"),
+            value=text_val,
+            placeholder="Ihre Erfahrung in 1-2 Sätzen..." if lang == "de" else "Your experience in 1-2 sentences...",
+            height=68,
+            key=f"fu_text_{fi}"
+        )
+        if new_text != text_val:
+            answers = st.session_state.followup_answers.copy()
+            answers[fi] = {**answers.get(fi, {}), "text": new_text}
+            st.session_state.followup_answers = answers
+        
+        # Navigation
+        st.markdown("---")
+        col_back, col_next = st.columns([1, 3])
+        with col_back:
+            if fi > 0:
+                if st.button("← " + ("Zurück" if lang == "de" else "Back"), key="fu_back", use_container_width=True):
+                    st.session_state.followup_index = fi - 1
+                    st.rerun()
+        with col_next:
+            has_choice = bool(st.session_state.followup_answers.get(fi, {}).get("choice"))
+            next_label = ("Ergebnisse anzeigen →" if lang == "de" else "View Results →") if fi == len(fqs) - 1 else ("Weiter →" if lang == "de" else "Next →")
+            if st.button(next_label, use_container_width=True, type="primary", disabled=not has_choice, key="fu_next"):
+                if fi < len(fqs) - 1:
+                    st.session_state.followup_index = fi + 1
+                else:
+                    st.session_state.page = "results"
+                st.rerun()
+        
+        # Skip link
+        if st.button(
+            "Vertiefung überspringen →" if lang == "de" else "Skip deep-dive →",
+            key="fu_skip",
+            type="secondary"
+        ):
+            st.session_state.page = "results"
             st.rerun()
 
 # ============================================================
@@ -1113,7 +1536,7 @@ elif st.session_state.page == "results":
         
         # Download buttons
         st.markdown("---")
-        col_md, col_html = st.columns(2)
+        col_md, col_pdf = st.columns(2)
         with col_md:
             md_content = get_summary_markdown(analysis, t, lang)
             st.download_button(
@@ -1123,13 +1546,13 @@ elif st.session_state.page == "results":
                 mime="text/markdown",
                 use_container_width=True
             )
-        with col_html:
-            html_content = get_summary_html(analysis, t, lang)
+        with col_pdf:
+            pdf_bytes = generate_pdf(analysis, t, lang)
             st.download_button(
-                label=f"📥 {t['downloadHtml']}",
-                data=html_content,
-                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.html",
-                mime="text/html",
+                label="📥 .pdf",
+                data=pdf_bytes,
+                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.pdf",
+                mime="application/pdf",
                 use_container_width=True
             )
     
@@ -1148,7 +1571,7 @@ elif st.session_state.page == "results":
             st.markdown(st.session_state.deep_analysis)
             
             st.markdown("---")
-            col_md2, col_html2, col_redo = st.columns(3)
+            col_md2, col_pdf2, col_redo = st.columns(3)
             with col_md2:
                 st.download_button(
                     label=f"📥 {t['downloadMd']}",
@@ -1157,16 +1580,13 @@ elif st.session_state.page == "results":
                     mime="text/markdown",
                     use_container_width=True
                 )
-            with col_html2:
-                # Convert deep analysis markdown to simple HTML
-                deep_html = st.session_state.deep_analysis
-                deep_html = deep_html.replace("### ", "<h3>").replace("\n## ", "\n<h2>").replace("\n# ", "\n<h1>")
-                deep_full = f'<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Arial;max-width:700px;margin:0 auto;padding:20px;line-height:1.6;}}@media print{{body{{-webkit-print-color-adjust:exact;print-color-adjust:exact;}}}}</style></head><body>{deep_html}</body></html>'
+            with col_pdf2:
+                pdf_deep = generate_pdf(analysis, t, lang, deep_text=st.session_state.deep_analysis)
                 st.download_button(
-                    label=f"📥 {t['downloadHtml']}",
-                    data=deep_full,
-                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.html",
-                    mime="text/html",
+                    label="📥 .pdf",
+                    data=pdf_deep,
+                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.pdf",
+                    mime="application/pdf",
                     use_container_width=True
                 )
             with col_redo:
@@ -1186,4 +1606,8 @@ elif st.session_state.page == "results":
         st.session_state.pending_choice = None
         st.session_state.deep_analysis = ""
         st.session_state.active_tab = "summary"
+        st.session_state.followup_questions = []
+        st.session_state.followup_answers = {}
+        st.session_state.followup_index = 0
+        st.session_state.followup_error = None
         st.rerun()
