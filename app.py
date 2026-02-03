@@ -906,7 +906,7 @@ Return exactly 5 questions."""
             return None, "No API key configured"
         
         genai.configure(api_key=api_key)
-        model = genai.GenerativeModel("gemini-2.5-flash-preview-05-20")
+        model = genai.GenerativeModel("gemini-2.5-flash")
         response = model.generate_content(prompt)
         text = response.text.strip()
         # Clean markdown fences if present
@@ -1536,20 +1536,29 @@ elif st.session_state.page == "results":
         
         # Download buttons
         st.markdown("---")
-        col_md, col_pdf = st.columns(2)
+        col_md, col_doc, col_pdf = st.columns(3)
         with col_md:
             md_content = get_summary_markdown(analysis, t, lang)
             st.download_button(
-                label=f"📥 {t['downloadMd']}",
+                label="📄 .md",
                 data=md_content,
                 file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.md",
                 mime="text/markdown",
                 use_container_width=True
             )
+        with col_doc:
+            html_content = get_summary_html(analysis, t, lang)
+            st.download_button(
+                label="📝 .doc",
+                data=html_content,
+                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.doc",
+                mime="application/msword",
+                use_container_width=True
+            )
         with col_pdf:
             pdf_bytes = generate_pdf(analysis, t, lang)
             st.download_button(
-                label="📥 .pdf",
+                label="📕 .pdf",
                 data=pdf_bytes,
                 file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.pdf",
                 mime="application/pdf",
@@ -1571,19 +1580,31 @@ elif st.session_state.page == "results":
             st.markdown(st.session_state.deep_analysis)
             
             st.markdown("---")
-            col_md2, col_pdf2, col_redo = st.columns(3)
+            col_md2, col_doc2, col_pdf2, col_redo = st.columns(4)
             with col_md2:
                 st.download_button(
-                    label=f"📥 {t['downloadMd']}",
+                    label="📄 .md",
                     data=st.session_state.deep_analysis,
                     file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.md",
                     mime="text/markdown",
                     use_container_width=True
                 )
+            with col_doc2:
+                # Convert markdown to Word-compatible HTML
+                deep_html = st.session_state.deep_analysis
+                deep_html = deep_html.replace("### ", "<h3>").replace("\n## ", "\n<h2>").replace("\n# ", "\n<h1>")
+                deep_doc = f'<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Calibri,Arial;max-width:700px;margin:0 auto;padding:20px;line-height:1.6;}}</style></head><body>{deep_html}</body></html>'
+                st.download_button(
+                    label="📝 .doc",
+                    data=deep_doc,
+                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.doc",
+                    mime="application/msword",
+                    use_container_width=True
+                )
             with col_pdf2:
                 pdf_deep = generate_pdf(analysis, t, lang, deep_text=st.session_state.deep_analysis)
                 st.download_button(
-                    label="📥 .pdf",
+                    label="📕 .pdf",
                     data=pdf_deep,
                     file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.pdf",
                     mime="application/pdf",
