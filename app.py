@@ -833,21 +833,28 @@ Write ONLY (max 250 words). No prior sections.
     model = genai.GenerativeModel("gemini-2.5-flash")
     full_report = ""
     
-    progress_bar = st.progress(0)
+    # Create container for live output
+    output_container = st.container()
     status_text = st.empty()
     
     for i, prompt in enumerate(chapters):
-        status_text.text(f"{'Kapitel' if lang == 'de' else 'Chapter'} {i+1}/10...")
-        progress_bar.progress((i + 1) / len(chapters))
+        status_text.markdown(f"**{'Generiere Kapitel' if lang == 'de' else 'Generating chapter'} {i+1}/{len(chapters)}...**")
         
         try:
             response = model.generate_content(prompt)
             chapter_text = response.text
             full_report += ("\n\n" if full_report else "") + chapter_text
+            
+            # Show chapter immediately as it's ready
+            with output_container:
+                st.markdown(chapter_text)
+                
         except Exception as e:
-            full_report += f"\n\n> ⚠️ Error in chapter {i+1}: {e}"
+            error_msg = f"\n\n> ⚠️ Error in chapter {i+1}: {e}"
+            full_report += error_msg
+            with output_container:
+                st.warning(f"Chapter {i+1} error: {e}")
     
-    progress_bar.empty()
     status_text.empty()
     
     return full_report
@@ -1548,18 +1555,13 @@ elif st.session_state.page == "results":
     
     # ---- DEEP ANALYSIS SECTION ----
     st.markdown("---")
+    st.markdown("### 🔮 " + ("KI-gestützte Tiefenanalyse" if lang == "de" else "AI-Powered Deep Analysis"))
     
     if not st.session_state.deep_analysis:
-        st.markdown("### 🔮 " + ("KI-gestützte Tiefenanalyse" if lang == "de" else "AI-Powered Deep Analysis"))
-        st.markdown(
-            "Generieren Sie eine umfassende 9-Kapitel psychometrische Analyse mit KI." if lang == "de"
-            else "Generate a comprehensive 9-chapter psychometric narrative using AI."
-        )
-        
-        if st.button(t["generateBtn"], type="primary", use_container_width=True):
-            result = generate_deep_analysis(analysis)
-            st.session_state.deep_analysis = result
-            st.rerun()
+        # Auto-start generation
+        result = generate_deep_analysis(analysis)
+        st.session_state.deep_analysis = result
+        st.rerun()
     else:
         st.markdown(st.session_state.deep_analysis)
         
