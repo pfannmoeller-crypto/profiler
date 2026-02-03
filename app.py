@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import google.generativeai as genai
 import json
 import math
+import time
 from datetime import datetime
 
 # ============================================================
@@ -150,6 +151,14 @@ st.markdown("""
         }
     }
     
+    /* Deep analysis text - ensure readable on all devices */
+    .stMarkdown p, .stMarkdown li, .stMarkdown h1, .stMarkdown h2, .stMarkdown h3 {
+        color: #f1f5f9 !important;
+    }
+    .stMarkdown a {
+        color: #60a5fa !important;
+    }
+    
     /* Section headers */
     .section-header {
         font-size: 20px;
@@ -201,11 +210,43 @@ if "scroll_key" not in st.session_state:
 # Increment on each rerun to force script re-execution
 st.session_state.scroll_key += 1
 
-st.markdown('<div id="top"></div>', unsafe_allow_html=True)
+# Use components.html for reliable script execution
+# Random string ensures no caching
+unique_id = f"{st.session_state.scroll_key}_{int(time.time() * 1000)}"
 components.html(f"""
+<div id="scroll-trigger-{unique_id}"></div>
 <script>
-    // Key: {st.session_state.scroll_key}
-    window.parent.document.querySelector('section.main').scrollTo(0, 0);
+    (function() {{
+        function scrollToTop() {{
+            // Try all possible scroll containers
+            var targets = [
+                window.parent.document.querySelector('section.main'),
+                window.parent.document.querySelector('.main'),
+                window.parent.document.querySelector('[data-testid="stAppViewContainer"]'),
+                window.parent.document.querySelector('.stApp'),
+                window.parent.document.body,
+                window.parent.document.documentElement
+            ];
+            targets.forEach(function(el) {{
+                if (el) {{
+                    el.scrollTop = 0;
+                    if (el.scrollTo) el.scrollTo({{top: 0, left: 0, behavior: 'instant'}});
+                }}
+            }});
+            window.parent.scrollTo(0, 0);
+        }}
+        // Multiple attempts with delays for mobile
+        scrollToTop();
+        setTimeout(scrollToTop, 100);
+        setTimeout(scrollToTop, 250);
+        setTimeout(scrollToTop, 500);
+        
+        // Focus trick: find first header and scroll into view
+        setTimeout(function() {{
+            var header = window.parent.document.querySelector('h1, h2, h3, .stMarkdown');
+            if (header) header.scrollIntoView({{behavior: 'instant', block: 'start'}});
+        }}, 200);
+    }})();
 </script>
 """, height=0)
 
@@ -1192,16 +1233,12 @@ if "pending_choice" not in st.session_state:
     st.session_state.pending_choice = None
 if "deep_analysis" not in st.session_state:
     st.session_state.deep_analysis = ""
-if "active_tab" not in st.session_state:
-    st.session_state.active_tab = "summary"
 if "followup_questions" not in st.session_state:
     st.session_state.followup_questions = []
 if "followup_answers" not in st.session_state:
     st.session_state.followup_answers = {}
 if "followup_index" not in st.session_state:
     st.session_state.followup_index = 0
-if "followup_loading" not in st.session_state:
-    st.session_state.followup_loading = False
 if "followup_error" not in st.session_state:
     st.session_state.followup_error = None
 
@@ -1406,14 +1443,19 @@ elif st.session_state.page == "followup":
             "Persönliche Fragen konnten nicht generiert werden. Bitte versuchen Sie es erneut." if lang == "de"
             else "Could not generate personal questions. Please try again."
         )
-        col_retry, col_skip = st.columns(2)
+        col_back, col_retry, col_skip = st.columns(3)
+        with col_back:
+            if st.button("← " + ("Zurück" if lang == "de" else "Back"), use_container_width=True):
+                st.session_state.page = "questions"
+                st.session_state.current_index = 42  # Last question
+                st.rerun()
         with col_retry:
-            if st.button("🔄 " + ("Erneut versuchen" if lang == "de" else "Try Again"), use_container_width=True, type="primary"):
+            if st.button("🔄 " + ("Erneut" if lang == "de" else "Retry"), use_container_width=True, type="primary"):
                 st.session_state.followup_error = None
                 st.session_state.followup_questions = []
                 st.rerun()
         with col_skip:
-            if st.button("→ " + ("Überspringen" if lang == "de" else "Skip"), use_container_width=True):
+            if st.button("→ " + ("Weiter" if lang == "de" else "Skip"), use_container_width=True):
                 st.session_state.page = "results"
                 st.rerun()
     
@@ -1459,8 +1501,6 @@ elif st.session_state.page == "followup":
         
         for key, text, color in options:
             is_selected = current_choice == key
-            border = color if is_selected else "#334155"
-            bg = f"{color}22" if is_selected else "transparent"
             if st.button(
                 f"{key})  {text}",
                 use_container_width=True,
@@ -1596,7 +1636,8 @@ elif st.session_state.page == "results":
     st.markdown(f"*{t['rulesIntro']}*")
     if analysis["operationalRules"]:
         for i, rule in enumerate(analysis["operationalRules"]):
-            st.markdown(f"**Rule {i+1}:** {rule}")
+            rule_label = "Regel" if lang == "de" else "Rule"
+            st.markdown(f"**{rule_label} {i+1}:** {rule}")
     else:
         st.info(t["completePhase3"])
     
@@ -1605,7 +1646,11 @@ elif st.session_state.page == "results":
     st.markdown("### 🔮 " + ("KI-gestützte Tiefenanalyse" if lang == "de" else "AI-Powered Deep Analysis"))
     
     if not st.session_state.deep_analysis:
-        # Auto-start generation
+        # Auto-start generation with loading message
+        st.markdown(
+            "*Generiere Ihre persönliche Tiefenanalyse...*" if lang == "de"
+            else "*Generating your personalized deep analysis...*"
+        )
         result = generate_deep_analysis(analysis)
         st.session_state.deep_analysis = result
         st.rerun()
@@ -1650,7 +1695,6 @@ elif st.session_state.page == "results":
         st.session_state.answers = {}
         st.session_state.pending_choice = None
         st.session_state.deep_analysis = ""
-        st.session_state.active_tab = "summary"
         st.session_state.followup_questions = []
         st.session_state.followup_answers = {}
         st.session_state.followup_index = 0
