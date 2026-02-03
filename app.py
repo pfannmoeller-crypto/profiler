@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import google.generativeai as genai
 import json
 import math
@@ -32,6 +33,7 @@ st.markdown("""
     }
     .trait-label {
         width: 200px;
+        min-width: 120px;
         font-size: 14px;
         font-weight: 500;
         color: #cbd5e1;
@@ -54,6 +56,22 @@ st.markdown("""
         font-weight: 700;
         font-size: 14px;
         color: #f1f5f9;
+    }
+    
+    /* Mobile responsive trait bars */
+    @media (max-width: 640px) {
+        .trait-bar-container {
+            gap: 8px;
+        }
+        .trait-label {
+            width: 110px;
+            min-width: 110px;
+            font-size: 12px;
+        }
+        .trait-score {
+            width: 24px;
+            font-size: 12px;
+        }
     }
     
     /* Option buttons */
@@ -103,11 +121,14 @@ st.markdown("""
         width: 100%;
         border-collapse: collapse;
         margin: 12px 0;
+        table-layout: fixed;
     }
     .styled-table th, .styled-table td {
         padding: 10px 14px;
         border: 1px solid #334155;
         text-align: left;
+        word-wrap: break-word;
+        overflow-wrap: break-word;
     }
     .styled-table th {
         background: #1e293b;
@@ -116,6 +137,17 @@ st.markdown("""
     }
     .styled-table td {
         color: #cbd5e1;
+    }
+    
+    /* Mobile responsive tables */
+    @media (max-width: 640px) {
+        .styled-table th, .styled-table td {
+            padding: 6px 8px;
+            font-size: 12px;
+        }
+        .styled-table th:first-child, .styled-table td:first-child {
+            width: 28%;
+        }
     }
     
     /* Section headers */
@@ -161,6 +193,14 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# Scroll to top helper - inject anchor and scroll script
+st.markdown('<div id="top"></div>', unsafe_allow_html=True)
+components.html("""
+<script>
+    window.parent.document.querySelector('section.main').scrollTo(0, 0);
+</script>
+""", height=0)
 
 # ============================================================
 # TRANSLATIONS
