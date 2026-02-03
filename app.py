@@ -153,6 +153,12 @@ st.markdown("""
     div.stButton > button {
         width: 100%;
     }
+    
+    /* Pulse animation for follow-up indicator */
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.5; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -457,6 +463,16 @@ QUESTIONS = {
 # HELPER FUNCTIONS
 # ============================================================
 
+def format_date(lang):
+    """Format current date properly for German/English."""
+    now = datetime.now()
+    if lang == "de":
+        months_de = ["Januar", "Februar", "März", "April", "Mai", "Juni", 
+                     "Juli", "August", "September", "Oktober", "November", "Dezember"]
+        return f"{now.day}. {months_de[now.month - 1]} {now.year}"
+    else:
+        return now.strftime("%B %d, %Y")
+
 def get_all_questions(lang):
     """Get all questions as a flat list."""
     qs = QUESTIONS[lang]
@@ -585,7 +601,7 @@ def render_trait_bar(label, value, color="#3b82f6"):
 
 def get_summary_markdown(analysis, t, lang):
     """Build the summary as a markdown string."""
-    date_str = datetime.now().strftime("%d. %B %Y" if lang == "de" else "%B %d, %Y")
+    date_str = format_date(lang)
     
     def bar(v):
         filled = round(v)
@@ -623,7 +639,7 @@ def get_summary_markdown(analysis, t, lang):
 
 def get_summary_html(analysis, t, lang):
     """Build a print-ready HTML document for the summary."""
-    date_str = datetime.now().strftime("%d. %B %Y" if lang == "de" else "%B %d, %Y")
+    date_str = format_date(lang)
     tr = analysis["traits"]
     
     def bar_html(label, value, color):
@@ -966,7 +982,7 @@ def generate_pdf(analysis, t, lang, deep_text=None):
     
     story = []
     tr = analysis["traits"]
-    date_str = datetime.now().strftime("%d. %B %Y" if lang == "de" else "%B %d, %Y")
+    date_str = format_date(lang)
     
     # Title
     story.append(Paragraph(t["pdfTitle"], style_title))
@@ -1302,7 +1318,7 @@ elif st.session_state.page == "questions":
                 "choice": random.choice(["A", "B"]),
                 "intensity": random.randint(1, 3)
             }
-        st.session_state.page = "results"
+        st.session_state.page = "followup"
         st.session_state.pending_choice = None
         st.rerun()
 
@@ -1333,8 +1349,8 @@ elif st.session_state.page == "followup":
     # Error state
     if st.session_state.followup_error:
         st.warning(
-            f"Persönliche Fragen konnten nicht generiert werden: {st.session_state.followup_error}" if lang == "de"
-            else f"Could not generate personal questions: {st.session_state.followup_error}"
+            "Persönliche Fragen konnten nicht generiert werden. Bitte versuchen Sie es erneut." if lang == "de"
+            else "Could not generate personal questions. Please try again."
         )
         col_retry, col_skip = st.columns(2)
         with col_retry:
@@ -1376,7 +1392,7 @@ elif st.session_state.page == "followup":
         """, unsafe_allow_html=True)
         
         # Question
-        st.markdown(f"### {fuq['question']}")
+        st.markdown(f"**{fuq['question']}**")
         
         # Options A, B, C
         current_choice = fua.get("choice")
@@ -1454,166 +1470,125 @@ elif st.session_state.page == "results":
     tr = analysis["traits"]
     
     st.markdown(f"# 🧠 {t['pdfTitle']}")
-    date_str = datetime.now().strftime("%d. %B %Y" if lang == "de" else "%B %d, %Y")
+    date_str = format_date(lang)
     st.markdown(f"*{t['pdfGenerated']} {date_str}*")
     
-    # Tab selection
-    tab_summary, tab_deep = st.tabs([t["summaryTab"], t["deepTab"]])
+    # ---- SUMMARY SECTION ----
+    # Architecture
+    st.markdown(f'<div class="section-header">{t["architecture"]}</div>', unsafe_allow_html=True)
     
-    # ---- SUMMARY TAB ----
-    with tab_summary:
-        # Architecture
-        st.markdown(f'<div class="section-header">{t["architecture"]}</div>', unsafe_allow_html=True)
+    st.markdown(f"**{t['hardwareTitle']}**")
+    for key in ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]:
+        render_trait_bar(t[key], tr[key], "#3b82f6")
+    
+    st.markdown(f"**{t['osTitle']}**")
+    for key in ["factFinder", "followThru", "quickStart", "implementor"]:
+        render_trait_bar(t[key], tr[key], "#a855f7")
+    
+    st.markdown(f"**{t['driversTitle']}**")
+    for key in ["autonomy", "mastery", "power", "affiliation"]:
+        render_trait_bar(t[key], tr[key], "#ec4899")
+    
+    # Contextual Contrasts
+    st.markdown(f'<div class="section-header">{t["contextualContrasts"]}</div>', unsafe_allow_html=True)
+    
+    contrasts = [
+        (t["decisionSpeed"], 
+         t["impulsive"] if get_choice(14) == "A" else t["methodical"],
+         t["paralysis"] if get_choice(14) == "A" else t["gambler"]),
+        (t["riskProfile"],
+         t["calcRisk"] if get_choice(15) == "A" else t["steadyOpt"],
+         t["riskAverse"] if get_choice(15) == "A" else t["thrillSeek"]),
+        (t["conflictStyle"],
+         t["diplomatic"] if get_choice(16) == "A" else t["harmonious"],
+         t["avoider"] if get_choice(16) == "A" else t["aggressive"]),
+        (t["learningMode"],
+         t["experimental"] if get_choice(18) == "A" else t["studious"],
+         t["theoretical"] if get_choice(18) == "A" else t["trialByFire"]),
+    ]
+    
+    contrast_html = f'<table class="styled-table"><tr><th>{t["trait"]}</th><th>{t["closeButNot"]}</th><th>{t["clearlyNot"]}</th></tr>'
+    for trait, close, not_you in contrasts:
+        contrast_html += f"<tr><td style='font-weight:600;'>{trait}</td><td>{close}</td><td style='color:#64748b;'>{not_you}</td></tr>"
+    contrast_html += "</table>"
+    st.markdown(contrast_html, unsafe_allow_html=True)
+    
+    # Dark Side
+    st.markdown(f'<div class="section-header">{t["darkSide"]}</div>', unsafe_allow_html=True)
+    if analysis["stressPatterns"]:
+        for p in analysis["stressPatterns"]:
+            st.markdown(f"⚠️ {p}")
+    else:
+        st.info(t["completeForAnalysis"])
+    
+    # Environment Fit
+    st.markdown(f'<div class="section-header">{t["environmentFit"]}</div>', unsafe_allow_html=True)
+    env_html = f'<table class="styled-table"><tr><th>{t["thrivesIn"]}</th><th>{t["failsIn"]}</th></tr>'
+    pairs = [
+        (tr["autonomy"] >= 6, t["highAutonomy"], t["structured"], t["micromanaged"], t["unstructured"]),
+        (tr["quickStart"] >= 6, t["fastMoving"], t["methodicalOrg"], t["slowMoving"], t["moveFast"]),
+        (tr["extraversion"] >= 6, t["collaborative"], t["deepWork"], t["isolated"], t["constantMeetings"]),
+        (tr["mastery"] >= 6, t["learningFocused"], t["executionFocused"], t["stagnant"], t["constantReinvention"]),
+    ]
+    for cond, hi, lo, fail_hi, fail_lo in pairs:
+        thrive = hi if cond else lo
+        fail = fail_hi if cond else fail_lo
+        env_html += f'<tr><td style="color:#10b981;">✅ {thrive}</td><td style="color:#ef4444;">❌ {fail}</td></tr>'
+    env_html += "</table>"
+    st.markdown(env_html, unsafe_allow_html=True)
+    
+    # Operational Rules
+    st.markdown(f'<div class="section-header">{t["operationalRules"]}</div>', unsafe_allow_html=True)
+    st.markdown(f"*{t['rulesIntro']}*")
+    if analysis["operationalRules"]:
+        for i, rule in enumerate(analysis["operationalRules"]):
+            st.markdown(f"**Rule {i+1}:** {rule}")
+    else:
+        st.info(t["completePhase3"])
+    
+    # ---- DEEP ANALYSIS SECTION ----
+    st.markdown("---")
+    
+    if not st.session_state.deep_analysis:
+        st.markdown("### 🔮 " + ("KI-gestützte Tiefenanalyse" if lang == "de" else "AI-Powered Deep Analysis"))
+        st.markdown(
+            "Generieren Sie eine umfassende 9-Kapitel psychometrische Analyse mit KI." if lang == "de"
+            else "Generate a comprehensive 9-chapter psychometric narrative using AI."
+        )
         
-        st.markdown(f"**{t['hardwareTitle']}**")
-        for key in ["openness", "conscientiousness", "extraversion", "agreeableness", "stability"]:
-            render_trait_bar(t[key], tr[key], "#3b82f6")
+        if st.button(t["generateBtn"], type="primary", use_container_width=True):
+            result = generate_deep_analysis(analysis)
+            st.session_state.deep_analysis = result
+            st.rerun()
+    else:
+        st.markdown(st.session_state.deep_analysis)
         
-        st.markdown(f"**{t['osTitle']}**")
-        for key in ["factFinder", "followThru", "quickStart", "implementor"]:
-            render_trait_bar(t[key], tr[key], "#a855f7")
-        
-        st.markdown(f"**{t['driversTitle']}**")
-        for key in ["autonomy", "mastery", "power", "affiliation"]:
-            render_trait_bar(t[key], tr[key], "#ec4899")
-        
-        # Contextual Contrasts
-        st.markdown(f'<div class="section-header">{t["contextualContrasts"]}</div>', unsafe_allow_html=True)
-        
-        contrasts = [
-            (t["decisionSpeed"], 
-             t["impulsive"] if get_choice(14) == "A" else t["methodical"],
-             t["paralysis"] if get_choice(14) == "A" else t["gambler"]),
-            (t["riskProfile"],
-             t["calcRisk"] if get_choice(15) == "A" else t["steadyOpt"],
-             t["riskAverse"] if get_choice(15) == "A" else t["thrillSeek"]),
-            (t["conflictStyle"],
-             t["diplomatic"] if get_choice(16) == "A" else t["harmonious"],
-             t["avoider"] if get_choice(16) == "A" else t["aggressive"]),
-            (t["learningMode"],
-             t["experimental"] if get_choice(18) == "A" else t["studious"],
-             t["theoretical"] if get_choice(18) == "A" else t["trialByFire"]),
-        ]
-        
-        contrast_html = f'<table class="styled-table"><tr><th>{t["trait"]}</th><th>{t["closeButNot"]}</th><th>{t["clearlyNot"]}</th></tr>'
-        for trait, close, not_you in contrasts:
-            contrast_html += f"<tr><td style='font-weight:600;'>{trait}</td><td>{close}</td><td style='color:#64748b;'>{not_you}</td></tr>"
-        contrast_html += "</table>"
-        st.markdown(contrast_html, unsafe_allow_html=True)
-        
-        # Dark Side
-        st.markdown(f'<div class="section-header">{t["darkSide"]}</div>', unsafe_allow_html=True)
-        if analysis["stressPatterns"]:
-            for p in analysis["stressPatterns"]:
-                st.markdown(f"⚠️ {p}")
-        else:
-            st.info(t["completeForAnalysis"])
-        
-        # Environment Fit
-        st.markdown(f'<div class="section-header">{t["environmentFit"]}</div>', unsafe_allow_html=True)
-        env_html = f'<table class="styled-table"><tr><th>{t["thrivesIn"]}</th><th>{t["failsIn"]}</th></tr>'
-        pairs = [
-            (tr["autonomy"] >= 6, t["highAutonomy"], t["structured"], t["micromanaged"], t["unstructured"]),
-            (tr["quickStart"] >= 6, t["fastMoving"], t["methodicalOrg"], t["slowMoving"], t["moveFast"]),
-            (tr["extraversion"] >= 6, t["collaborative"], t["deepWork"], t["isolated"], t["constantMeetings"]),
-            (tr["mastery"] >= 6, t["learningFocused"], t["executionFocused"], t["stagnant"], t["constantReinvention"]),
-        ]
-        for cond, hi, lo, fail_hi, fail_lo in pairs:
-            thrive = hi if cond else lo
-            fail = fail_hi if cond else fail_lo
-            env_html += f'<tr><td style="color:#10b981;">✅ {thrive}</td><td style="color:#ef4444;">❌ {fail}</td></tr>'
-        env_html += "</table>"
-        st.markdown(env_html, unsafe_allow_html=True)
-        
-        # Operational Rules
-        st.markdown(f'<div class="section-header">{t["operationalRules"]}</div>', unsafe_allow_html=True)
-        st.markdown(f"*{t['rulesIntro']}*")
-        if analysis["operationalRules"]:
-            for i, rule in enumerate(analysis["operationalRules"]):
-                st.markdown(f"**Rule {i+1}:** {rule}")
-        else:
-            st.info(t["completePhase3"])
-        
-        # Download buttons
+        # Download buttons (only shown after deep analysis is generated)
         st.markdown("---")
-        col_md, col_doc, col_pdf = st.columns(3)
+        col_md, col_pdf, col_redo = st.columns(3)
         with col_md:
-            md_content = get_summary_markdown(analysis, t, lang)
+            # Combined markdown: summary + deep analysis
+            combined_md = get_summary_markdown(analysis, t, lang) + "\n\n---\n\n" + st.session_state.deep_analysis
             st.download_button(
                 label="📄 .md",
-                data=md_content,
-                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.md",
+                data=combined_md,
+                file_name=f"user-manual-{datetime.now().strftime('%Y-%m-%d')}.md",
                 mime="text/markdown",
                 use_container_width=True
             )
-        with col_doc:
-            html_content = get_summary_html(analysis, t, lang)
-            st.download_button(
-                label="📝 .doc",
-                data=html_content,
-                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.doc",
-                mime="application/msword",
-                use_container_width=True
-            )
         with col_pdf:
-            pdf_bytes = generate_pdf(analysis, t, lang)
+            pdf_complete = generate_pdf(analysis, t, lang, deep_text=st.session_state.deep_analysis)
             st.download_button(
                 label="📕 .pdf",
-                data=pdf_bytes,
-                file_name=f"user-manual-summary-{datetime.now().strftime('%Y-%m-%d')}.pdf",
+                data=pdf_complete,
+                file_name=f"user-manual-{datetime.now().strftime('%Y-%m-%d')}.pdf",
                 mime="application/pdf",
                 use_container_width=True
             )
-    
-    # ---- DEEP ANALYSIS TAB ----
-    with tab_deep:
-        if not st.session_state.deep_analysis:
-            st.markdown("### 🔮 AI-Powered Deep Analysis")
-            st.markdown("Generate a comprehensive 9-chapter psychometric narrative using AI." if lang == "en" 
-                       else "Generieren Sie eine umfassende 9-Kapitel psychometrische Analyse mit KI.")
-            
-            if st.button(t["generateBtn"], type="primary", use_container_width=True):
-                result = generate_deep_analysis(analysis)
-                st.session_state.deep_analysis = result
+        with col_redo:
+            if st.button("🔄 " + ("Neu" if lang == "de" else "Redo"), use_container_width=True):
+                st.session_state.deep_analysis = ""
                 st.rerun()
-        else:
-            st.markdown(st.session_state.deep_analysis)
-            
-            st.markdown("---")
-            col_md2, col_doc2, col_pdf2, col_redo = st.columns(4)
-            with col_md2:
-                st.download_button(
-                    label="📄 .md",
-                    data=st.session_state.deep_analysis,
-                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.md",
-                    mime="text/markdown",
-                    use_container_width=True
-                )
-            with col_doc2:
-                # Convert markdown to Word-compatible HTML
-                deep_html = st.session_state.deep_analysis
-                deep_html = deep_html.replace("### ", "<h3>").replace("\n## ", "\n<h2>").replace("\n# ", "\n<h1>")
-                deep_doc = f'<!DOCTYPE html><html><head><meta charset="UTF-8"><style>body{{font-family:Calibri,Arial;max-width:700px;margin:0 auto;padding:20px;line-height:1.6;}}</style></head><body>{deep_html}</body></html>'
-                st.download_button(
-                    label="📝 .doc",
-                    data=deep_doc,
-                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.doc",
-                    mime="application/msword",
-                    use_container_width=True
-                )
-            with col_pdf2:
-                pdf_deep = generate_pdf(analysis, t, lang, deep_text=st.session_state.deep_analysis)
-                st.download_button(
-                    label="📕 .pdf",
-                    data=pdf_deep,
-                    file_name=f"deep-analysis-{datetime.now().strftime('%Y-%m-%d')}.pdf",
-                    mime="application/pdf",
-                    use_container_width=True
-                )
-            with col_redo:
-                if st.button("🔄 " + ("Neu" if lang == "de" else "Redo"), use_container_width=True):
-                    st.session_state.deep_analysis = ""
-                    st.rerun()
     
     # Disclaimer + Start Over
     st.markdown("---")
