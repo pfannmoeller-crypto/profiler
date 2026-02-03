@@ -194,10 +194,17 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# Scroll to top helper - inject anchor and scroll script
+# Scroll to top helper - use session state to create unique key
+if "scroll_key" not in st.session_state:
+    st.session_state.scroll_key = 0
+
+# Increment on each rerun to force script re-execution
+st.session_state.scroll_key += 1
+
 st.markdown('<div id="top"></div>', unsafe_allow_html=True)
-components.html("""
+components.html(f"""
 <script>
+    // Key: {st.session_state.scroll_key}
     window.parent.document.querySelector('section.main').scrollTo(0, 0);
 </script>
 """, height=0)
